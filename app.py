@@ -93,7 +93,7 @@ st.markdown(
         margin-top: 8px;
     }
 
-    label, .stSelectbox label, .stNumberInput label {
+    label, .stSelectbox label, .stNumberInput label, .stCheckbox label {
         color: rgba(255,255,255,0.80) !important;
         font-size: 0.88rem !important;
         font-weight: 500 !important;
@@ -157,54 +157,87 @@ st.markdown(
 )
 
 # ─────────────────────────  Dosya yolları  ─────────────────────────
-BASE_DIR      = os.path.dirname(__file__)
-DATA_PATH     = os.path.join(BASE_DIR, "clean_data.csv")
+BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH    = os.path.join(BASE_DIR, "xgboost_model.pkl")
 FEATURES_PATH = os.path.join(BASE_DIR, "feature_columns.pkl")
+SEHIR_MAP_PATH = os.path.join(BASE_DIR, "sehir_map.pkl")
+DATA_PATH     = os.path.join(BASE_DIR, "clean_data.csv")
+
+# ─────────────────────────  Encoding sabitleri  ─────────────────────────
+YAS_MAP = {
+    "0 (Yeni)":     0,
+    "1-5 Yıl":      3,
+    "5-10 Yıl":     7,
+    "11-15 Yıl":    13,
+    "16-20 Yıl":    18,
+    "21 Ve Üzeri":  25,
+}
+
+KULLANIM_MAP = {
+    "Boş":      0.0,
+    "Kiracılı": 1.0,
+}
+
+ISITMA_TIPLERI = [
+    "Doğalgaz Sobalı",
+    "Güneş Enerjisi",
+    "Isıtma Yok",
+    "Jeotermal",
+    "Kat Kaloriferi",
+    "Klimalı",
+    "Kombi Doğalgaz",
+    "Merkezi (Pay Ölçer)",
+    "Merkezi Doğalgaz",
+    "Merkezi Kömür",
+    "Sobalı",
+    "Yerden Isıtma",
+]
 
 # ─────────────────────────  Model & Veri Yükleme  ─────────────────────────
-# Model dosyası yoksa kullanıcıyı bilgilendir
 if not os.path.exists(MODEL_PATH) or not os.path.exists(FEATURES_PATH):
     st.error(
         "⚠️ Model dosyası bulunamadı!\n\n"
-        "Lütfen önce terminalde şunu çalıştırın:\n\n"
-        "```\npython save_model.py\n```"
+        "Lütfen önce `model.ipynb` not defterini çalıştırarak modeli kaydedin."
+    )
+    st.stop()
+
+if not os.path.exists(SEHIR_MAP_PATH):
+    st.error(
+        "⚠️ `sehir_map.pkl` dosyası bulunamadı!\n\n"
+        "Lütfen `build_sehir_map.py` betiğini çalıştırın:\n\n"
+        "```\npython build_sehir_map.py\n```"
     )
     st.stop()
 
 
 @st.cache_resource(show_spinner="Model yükleniyor…")
 def load_model():
-    model        = joblib.load(MODEL_PATH)
-    feature_cols = joblib.load(FEATURES_PATH)
-    return model, feature_cols
+    _model        = joblib.load(MODEL_PATH)
+    _feature_cols = joblib.load(FEATURES_PATH)
+    _sehir_map    = joblib.load(SEHIR_MAP_PATH)
+    return _model, _feature_cols, _sehir_map
 
 
 @st.cache_data(show_spinner=False)
-def get_options():
-    data = pd.read_csv(DATA_PATH)
+def get_options(_data_path):
+    df = pd.read_csv(_data_path)
     return {
-        "sehirler":      sorted(data["Şehir"].unique().tolist()),
-        "kat_listesi":   sorted(
-            data["Bulunduğu_Kat"].unique().tolist(),
-            key=lambda x: (not x[0].isdigit(), x),
-        ),
-        "bina_yasi":     data["Binanın_Yaşı"].unique().tolist(),
-        "isitma":        sorted(data["Isıtma_Tipi"].unique().tolist()),
-        "kullanim":      data["Kullanım_Durumu"].unique().tolist(),
-        "oda_sayisi":    sorted(data["Oda_Sayısı"].unique().tolist()),
-        "banyo_sayisi":  sorted(data["Banyo_Sayısı"].unique().tolist()),
-        "net_m2_min":    int(data["Net_Metrekare"].min()),
-        "net_m2_max":    int(data["Net_Metrekare"].max()),
-        "brut_m2_min":   int(data["Brüt_Metrekare"].min()),
-        "brut_m2_max":   int(data["Brüt_Metrekare"].max()),
-        "kat_sayisi_min":int(data["Binanın_Kat_Sayısı"].min()),
-        "kat_sayisi_max":int(data["Binanın_Kat_Sayısı"].max()),
+        "net_m2_min":    int(df["Net_Metrekare"].min()),
+        "net_m2_max":    int(df["Net_Metrekare"].max()),
+        "brut_m2_min":   int(df["Brüt_Metrekare"].min()),
+        "brut_m2_max":   min(int(df["Brüt_Metrekare"].max()), 2000),
+        "oda_sayisi":    sorted(df["Oda_Sayısı"].unique().tolist()),
+        "banyo_sayisi":  sorted(df["Banyo_Sayısı"].unique().tolist()),
+        "kat_sayisi_min":int(df["Binanın_Kat_Sayısı"].min()),
+        "kat_sayisi_max":int(df["Binanın_Kat_Sayısı"].max()),
     }
 
 
-model, feature_cols = load_model()
-opts = get_options()
+model, feature_cols, sehir_map = load_model()
+opts = get_options(DATA_PATH)
+
+# Şehir listesi: sehir_map'ten türetilir, capitalize ile görüntülenir
+sehir_listesi = sorted(sehir_map.keys())
 
 # ─────────────────────────  Başlık  ─────────────────────────
 st.markdown(
@@ -217,7 +250,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ─────────────────────────  Form  ─────────────────────────
+# ─────────────────────────  FORM — Bölüm 1: Metrekare & Yapı  ─────────────────────────
 st.markdown('<div class="form-card"><div class="section-title">📐 Metrekare & Yapı Bilgileri</div>', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
@@ -240,9 +273,24 @@ with col2:
 
 col3, col4, col5 = st.columns(3)
 with col3:
-    oda = st.selectbox("Oda Sayısı", options=opts["oda_sayisi"], index=1)
+    # Oda sayısı float; "2+1" → 2.5 gibi göster
+    oda_labels = []
+    oda_values = []
+    for v in opts["oda_sayisi"]:
+        if v == int(v):
+            oda_labels.append(f"{int(v)+1}+0" if False else f"{int(v)} Oda")
+        else:
+            tam = int(v)
+            oda_labels.append(f"{tam}+1")
+        oda_values.append(v)
+    oda_idx = st.selectbox("Oda Sayısı", options=range(len(oda_labels)), format_func=lambda i: oda_labels[i], index=2)
+    oda = oda_values[oda_idx]
+
 with col4:
-    banyo = st.selectbox("Banyo Sayısı", options=opts["banyo_sayisi"], index=0)
+    banyo_idx = st.selectbox("Banyo Sayısı", options=range(len(opts["banyo_sayisi"])),
+                             format_func=lambda i: f"{int(opts['banyo_sayisi'][i])} Banyo", index=0)
+    banyo = opts["banyo_sayisi"][banyo_idx]
+
 with col5:
     bina_kat = st.number_input(
         "Binanın Kat Sayısı",
@@ -254,54 +302,93 @@ with col5:
 
 st.markdown("</div>", unsafe_allow_html=True)
 
+# ─────────────────────────  FORM — Bölüm 2: Konum & Daire Özellikleri  ─────────────────────────
 st.markdown('<div class="form-card"><div class="section-title">📍 Konum & Daire Özellikleri</div>', unsafe_allow_html=True)
 
 col6, col7 = st.columns(2)
 with col6:
-    default_sehir = opts["sehirler"].index("istanbul") if "istanbul" in opts["sehirler"] else 0
-    sehir = st.selectbox("Şehir", options=opts["sehirler"], index=default_sehir)
+    default_sehir_idx = sehir_listesi.index("istanbul") if "istanbul" in sehir_listesi else 0
+    sehir_key = st.selectbox(
+        "Şehir",
+        options=sehir_listesi,
+        index=default_sehir_idx,
+        format_func=lambda s: s.capitalize(),
+    )
 with col7:
-    bulundugu_kat = st.selectbox("Bulunduğu Kat", options=opts["kat_listesi"], index=0)
+    bina_yasi_label = st.selectbox("Binanın Yaşı", options=list(YAS_MAP.keys()), index=0)
 
 col8, col9 = st.columns(2)
 with col8:
-    bina_yasi = st.selectbox("Binanın Yaşı", options=opts["bina_yasi"], index=0)
+    isitma_tipi = st.selectbox("Isıtma Tipi", options=ISITMA_TIPLERI, index=6)  # Kombi Doğalgaz default
 with col9:
-    isitma = st.selectbox("Isıtma Tipi", options=opts["isitma"], index=0)
+    kullanim_label = st.selectbox("Kullanım Durumu", options=list(KULLANIM_MAP.keys()), index=0)
 
-kullanim = st.selectbox("Kullanım Durumu", options=opts["kullanim"], index=0)
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ─────────────────────────  FORM — Bölüm 3: Daire Tipi  ─────────────────────────
+st.markdown('<div class="form-card"><div class="section-title">🏢 Daire Tipi</div>', unsafe_allow_html=True)
+
+col10, col11, col12 = st.columns(3)
+with col10:
+    apartman_mi = st.checkbox("Apartman / Site Dairesi", value=True,
+                              help="Villa veya müstakil ev değilse işaretleyin")
+with col11:
+    zemin_mi = st.checkbox("Zemin / Bahçe Katı", value=False,
+                           help="Zemin veya bahçe katında ise işaretleyin")
+with col12:
+    cati_mi = st.checkbox("Çatı Katı", value=False,
+                          help="Çatı dubleks veya penthouse ise işaretleyin")
 
 st.markdown("</div>", unsafe_allow_html=True)
 
 # ─────────────────────────  Tahmin  ─────────────────────────
 if st.button("🔍  Fiyat Tahmin Et"):
     with st.spinner("Tahmin hesaplanıyor…"):
-        # Kullanıcı girdisinden ham DataFrame satırı
+
+        # --- Şehir encode (target encoding ile uyumlu) ---
+        sehir_encoded = sehir_map.get(sehir_key, sehir_map[list(sehir_map.keys())[0]])
+
+        # --- Binanın Yaşı ---
+        bina_yasi_val = float(YAS_MAP[bina_yasi_label])
+
+        # --- Kullanım Durumu ---
+        kullanim_val = KULLANIM_MAP[kullanim_label]
+
+        # --- Isıtma Tipi one-hot ---
+        # Modeldeki sütun adları: "Isıtma_Tipi_<tip>"; drop_first=True → ilk tip (Doğalgaz Sobalı) baseline
+        isitma_one_hot = {}
+        for tip in ISITMA_TIPLERI[1:]:   # drop_first: ilk tip çıkarıldı
+            col_name = f"Isıtma_Tipi_{tip}"
+            isitma_one_hot[col_name] = (isitma_tipi == tip)
+
+        # --- Temel input dict ---
         input_dict = {
-            "Net_Metrekare":      [net_m2],
+            "Net_Metrekare":      [float(net_m2)],
             "Brüt_Metrekare":     [float(brut_m2)],
             "Oda_Sayısı":         [float(oda)],
-            "Bulunduğu_Kat":      [bulundugu_kat],
-            "Binanın_Yaşı":       [bina_yasi],
-            "Isıtma_Tipi":        [isitma],
-            "Şehir":              [sehir],
-            "Binanın_Kat_Sayısı": [bina_kat],
-            "Kullanım_Durumu":    [kullanim],
+            "Binanın_Yaşı":       [bina_yasi_val],
+            "Şehir":              [sehir_encoded],
+            "Binanın_Kat_Sayısı": [float(bina_kat)],
+            "Kullanım_Durumu":    [kullanim_val],
             "Banyo_Sayısı":       [float(banyo)],
+            "Apartman_Mi":        [float(int(apartman_mi))],
+            "Zemin_Mi":           [float(int(zemin_mi))],
+            "Cati_Mi":            [float(int(cati_mi))],
         }
+
+        # Isıtma one-hot sütunlarını ekle
+        for k, v in isitma_one_hot.items():
+            input_dict[k] = [v]
+
         input_df = pd.DataFrame(input_dict)
 
-        # get_dummies ile encode et
-        kategorik = input_df.select_dtypes(include=["object"]).columns
-        input_enc = pd.get_dummies(input_df, columns=kategorik, drop_first=True)
-
         # Modelin beklediği tüm sütunları ekle / sırala
-        for col in feature_cols:
-            if col not in input_enc.columns:
-                input_enc[col] = False
-        input_enc = input_enc[feature_cols]
+        for fc in feature_cols:
+            if fc not in input_df.columns:
+                input_df[fc] = False
+        input_df = input_df[feature_cols]
 
-        predicted_price = model.predict(input_enc)[0]
+        predicted_price = model.predict(input_df)[0]
 
     formatted   = f"{predicted_price:,.0f} ₺"
     formatted_m = f"{predicted_price / 1_000_000:.2f} Milyon ₺"
@@ -320,10 +407,10 @@ if st.button("🔍  Fiyat Tahmin Et"):
     st.markdown(
         f"""
         <div class="info-row">
-            <div class="info-chip">Şehir<span>{sehir.capitalize()}</span></div>
+            <div class="info-chip">Şehir<span>{sehir_key.capitalize()}</span></div>
             <div class="info-chip">Net m²<span>{net_m2} m²</span></div>
-            <div class="info-chip">Oda<span>{oda}</span></div>
-            <div class="info-chip">Banyo<span>{banyo}</span></div>
+            <div class="info-chip">Oda<span>{oda_labels[oda_idx]}</span></div>
+            <div class="info-chip">Bina Yaşı<span>{bina_yasi_label}</span></div>
         </div>
         """,
         unsafe_allow_html=True,
